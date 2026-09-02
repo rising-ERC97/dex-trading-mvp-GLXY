@@ -1,0 +1,25 @@
+{
+  "name": "dex-exchange",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Hyperliquid-style DEX with real (Upbit) spot markets and real Hyperliquid perp markets",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "concurrently --raw --kill-others --kill-others-on-fail \"cross-env DEX_QUIET=1 pnpm --filter @dex/api run dev\" \"pnpm --filter @dex/web run dev:wait\" \"pnpm --filter @dex/admin run dev:wait\"",
+    "build": "pnpm -r --filter './packages/*' --filter './apps/*' run build",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "test": "pnpm -r --filter './packages/*' --filter './apps/api' run test",
+    "test:live": "pnpm -r run test:live",
+    "test:e2e": "pnpm --filter @dex/e2e run test",
+    "dev:api": "pnpm --filter @dex/api run dev",
+    "dev:web": "pnpm --filter @dex/web run dev",
+    "dev:admin": "pnpm --filter @dex/admin run dev"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.4",
+    "cross-env": "^7.0.3"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "@dex/admin",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Read-only ops console — modular ES-module UI (overview, feeds, risk, markets)",
+  "main": "server.js",
+  "scripts": {
+    "dev": "node server.js",
+    "dev:wait": "wait-on -t 180000 tcp:127.0.0.1:5180 && node server.js",
+    "start": "node server.js",
+    "build": "node -e \"\""
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "wait-on": "^8.0.5"
+  },
+  "dependencies": {
+    "axios": "^1.19.0"
+  }
+}

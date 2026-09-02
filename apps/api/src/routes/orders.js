@@ -1,0 +1,334 @@
+import { DexError, ErrorCodes, absBig, divUnits, fromUnits, jsonSafe, mulDiv, mulUnits, parseOrderRequest, roundToLot, roundToTick, zBracketRequest, zPositiveUnits, } from '@dex/shared';
+/**
+ * Final state of a just-submitted order, derived from its own events. The
+ * engine evicts terminal orders from memory immediately, so getOrder() returns
+ * undefined for an order that fully filled or was cancelled in the same call —
+ * we reconstruct the terminal snapshot from the trade/cancel events instead of
+ * relying on the stale at-acceptance snapshot.
+ */
+function finalOrderState(events, accepted) {
+    let snap = accepted;
+    let cancelled = false;
+    for (const e of events) {
+        if (e.kind === 'trade') {
+            if (e.takerOrder.id === accepted.id)
+                snap = e.takerOrder;
+            else if (e.makerOrder.id === accepted.id)
+                snap = e.makerOrder;
+        }
+        else if (e.kind === 'orderCancelled' && e.orderId === accepted.id) {
+            cancelled = true;
+        }
+    }
+    return cancelled && snap.status !== 'filled' ? { ...snap, status: 'cancelled' } : snap;
+}
+/**
+ * Volume-weighted average fill price for an order, from its trade events —
+ * what a trader most wants after a market order sweeps multiple price levels.
+ * Returns null when the order had no fills. (Computed at the read layer from
+ * the fill tape, so no extra order state needs to be persisted.)
+ */
+function avgFillPrice(events, orderId) {
+    let notional = 0n;
+    let qty = 0n;
+    for (const e of events) {
+        if (e.kind === 'trade' && (e.trade.takerOrderId === orderId || e.trade.makerOrderId === orderId)) {
+            notional += mulUnits(e.trade.price, e.trade.qty);
+            qty += e.trade.qty;
+        }
+    }
+    return qty > 0n ? divUnits(notional, qty) : null;
+}
+/** Total base qty an order filled across its trade events. */
+function entryFillQty(events, orderId) {
+    let qty = 0n;
+    for (const e of events) {
+        if (e.kind === 'trade' && (e.trade.takerOrderId === orderId || e.trade.makerOrderId === orderId)) {
+            qty += e.trade.qty;
+        }
+    }
+    return qty;
+}
+export function registerOrderRoutes(app, svc, authenticate, metrics) {
+    const { engine, repos, pipeline } = svc;
+    app.post('/api/orders', { preHandler: authenticate }, async (req) => {
+        const parsed = parseOrderRequest(req.body);
+        // a plain market order gets a slippage bound now; a stop-MARKET derives its
+        // bound from the book at activation time (in the engine), so leave it unset
+        const request = parsed.type === 'market' && parsed.price === undefined && parsed.trigger === undefined
+            ? { ...parsed, price: defaultMarketBound(svc, parsed) }
+            : parsed;
+        const outcome = await pipeline.run(() => {
+            const events = engine.submitOrder(req.userId, request, Date.now());
+            return [events, events];
+        });
+        const rejected = outcome.find((e) => e.kind === 'orderRejected');
+        if (rejected) {
+            metrics?.ordersRejected.inc({ code: rejected.code });
+            // idempotent retry: a duplicate clientOrderId returns the EXISTING live
+            // order (200) instead of an error, so a client that retries after a
+            // network timeout can't accidentally double-submit
+            if (rejected.code === ErrorCodes.DUPLICATE_CLIENT_ORDER_ID && request.clientOrderId !== undefined) {
+                const existing = engine
+                    .getOpenOrders(req.userId, request.marketId)
+                    .find((o) => o.clientOrderId === request.clientOrderId);
+                if (existing)
+                    return jsonSafe(existing);
+            }
+            const code = Object.values(ErrorCodes).includes(rejected.code)
+                ? rejected.code
+                : 'INVALID_ORDER';
+            throw new DexError(code, rejected.reason);
+        }
+        const accepted = outcome.find((e) => e.kind === 'orderAccepted');
+        if (!accepted)
+            throw new DexError('INTERNAL', 'no acceptance event');
+        metrics?.ordersAccepted.inc({ market: request.marketId, type: request.type });
+        metrics?.tradesExecuted.inc(outcome.filter((e) => e.kind === 'trade').length);
+        // engine may have already evicted a fully-filled/cancelled order — prefer
+        // the live order, else reconstruct the terminal state from the events
+        const live = engine.getOrder(accepted.order.id);
+        const order = live ?? finalOrderState(outcome, accepted.order);
+        const avg = avgFillPrice(outcome, accepted.order.id);
+        return jsonSafe({ ...order, avgFillPrice: avg });
+    });
+    app.delete('/api/orders/:id', { preHandler: authenticate }, async (req) => {
+        const { id } = req.params;
+        await pipeline.exec(() => engine.cancelOrder(req.userId, id, Date.now()));
+        return { ok: true };
+    });
+    // cancel ALL of a user's open orders, optionally scoped to one market
+    app.delete('/api/orders', { preHandler: authenticate }, async (req) => {
+        const q = req.query;
+        const open = engine.getOpenOrders(req.userId, q.market);
+        let cancelled = 0;
+        for (const o of open) {
+            // a fill between snapshot and cancel makes the id unknown — ignore and continue
+            try {
+                await pipeline.exec(() => engine.cancelOrder(req.userId, o.id, Date.now()));
+                cancelled += 1;
+            }
+            catch {
+                /* already gone */
+            }
+        }
+        return { cancelled };
+    });
+    // single order lookup by id (live or historical), ownership-checked
+    app.get('/api/orders/:id', { preHandler: authenticate }, async (req) => {
+        const { id } = req.params;
+        const order = engine.getOrder(id) ?? (await repos.orders.byId(id));
+        if (!order || order.userId !== req.userId) {
+            throw new DexError('ORDER_NOT_FOUND', `unknown order ${id}`);
+        }
+        return jsonSafe(order);
+    });
+    // amend (cancel-replace) a resting GTC limit order's price and/or qty
+    app.patch('/api/orders/:id', { preHandler: authenticate }, async (req) => {
+        const { id } = req.params;
+        const body = (req.body ?? {});
+        const changes = {};
+        if (body.price !== undefined)
+            changes.price = zPositiveUnits.parse(body.price);
+        if (body.qty !== undefined)
+            changes.qty = zPositiveUnits.parse(body.qty);
+        if (changes.price === undefined && changes.qty === undefined) {
+            throw new DexError('INVALID_ORDER', 'amend requires a new price and/or qty');
+        }
+        const outcome = await pipeline.run(() => {
+            const events = engine.amendOrder(req.userId, id, changes, Date.now());
+            return [events, events];
+        });
+        const accepted = [...outcome].reverse().find((e) => e.kind === 'orderAccepted');
+        if (!accepted)
+            throw new DexError('INTERNAL', 'amend produced no order');
+        const live = engine.getOrder(accepted.order.id);
+        return jsonSafe(live ?? finalOrderState(outcome, accepted.order));
+    });
+    // bracket: a market entry + an OCO take-profit / stop-loss pair that protect
+    // the resulting position. Perp only (the legs are reduce-only).
+    app.post('/api/bracket', { preHandler: authenticate }, async (req) => {
+        const p = zBracketRequest.parse(req.body);
+        const m = engine.getMarket(p.marketId);
+        if (!m)
+            throw new DexError('MARKET_NOT_FOUND', `unknown market ${p.marketId}`);
+        if (m.type !== 'perp')
+            throw new DexError('INVALID_ORDER', 'bracket orders require a perp market');
+        // tick-align the exit prices UP FRONT so a misaligned price can never reject
+        // a protective leg after the entry has already opened a position
+        const tpPrice = roundToTick(p.takeProfitPrice, m.tickSize, 'half-up');
+        const slPrice = roundToTick(p.stopLossPrice, m.tickSize, 'half-up');
+        if (tpPrice <= 0n || slPrice <= 0n)
+            throw new DexError('INVALID_ORDER', 'invalid bracket TP/SL price');
+        // 1. market entry — must fill so the protective legs have a position
+        const entryReq = {
+            marketId: p.marketId,
+            side: p.side,
+            type: 'market',
+            qty: p.qty,
+            tif: 'IOC',
+            price: defaultMarketBound(svc, { marketId: p.marketId, side: p.side }),
+        };
+        const entryOut = await pipeline.run(() => {
+            const events = engine.submitOrder(req.userId, entryReq, Date.now());
+            return [events, events];
+        });
+        const entryRej = entryOut.find((e) => e.kind === 'orderRejected');
+        if (entryRej)
+            throw new DexError('INVALID_ORDER', `bracket entry rejected: ${entryRej.reason}`);
+        const entryAcc = entryOut.find((e) => e.kind === 'orderAccepted');
+        if (!entryAcc)
+            throw new DexError('INTERNAL', 'bracket entry produced no order');
+        // size the protective legs to the ACTUAL filled qty (a market IOC entry can
+        // partially fill, then cancel the remainder) so the legs exactly cover the
+        // real position and never over-reserve the reduce-only budget
+        const filled = entryFillQty(entryOut, entryAcc.order.id);
+        const coverQty = roundToLot(filled, m.lotSize);
+        if (coverQty <= 0n) {
+            throw new DexError('INVALID_ORDER', 'bracket entry did not fill — no position to protect');
+        }
+        // 2. OCO exit legs: a reduce-only TP limit + reduce-only SL stop-market.
+        // (SL is a dormant conditional, so the two never double-count against the
+        // position's reduce-only budget; filling one cancels the other.)
+        const group = `br-${entryAcc.order.id}`;
+        const exitSide = p.side === 'buy' ? 'sell' : 'buy';
+        const tpReq = {
+            marketId: p.marketId, side: exitSide, type: 'limit', price: tpPrice,
+            qty: coverQty, tif: 'GTC', reduceOnly: true, ocoGroup: group,
+        };
+        const slReq = {
+            marketId: p.marketId, side: exitSide, type: 'market', qty: coverQty, tif: 'IOC', reduceOnly: true,
+            trigger: { price: slPrice, direction: p.side === 'buy' ? 'below' : 'above' },
+            ocoGroup: group,
+        };
+        const tpOut = await pipeline.run(() => {
+            const events = engine.submitOrder(req.userId, tpReq, Date.now());
+            return [events, events];
+        });
+        const slOut = await pipeline.run(() => {
+            const events = engine.submitOrder(req.userId, slReq, Date.now());
+            return [events, events];
+        });
+        // a bracket must never leave a position silently unprotected: if either
+        // protective leg was rejected, cancel any leg that did rest and flatten the
+        // just-opened entry, then surface the failure
+        const tpRej = tpOut.find((e) => e.kind === 'orderRejected');
+        const slRej = slOut.find((e) => e.kind === 'orderRejected');
+        if (tpRej || slRej) {
+            // emergency close uses a WIDE (±50% of ref) reduce-only bound so it sweeps
+            // all available opposite liquidity, not just the ±5% market bound — an
+            // unprotected position must be closed even into a thin book
+            const ref = engine.getMarkPrice(p.marketId) ?? avgFillPrice(entryOut, entryAcc.order.id) ?? 0n;
+            const flattenBound = ref > 0n
+                ? exitSide === 'buy'
+                    ? roundToTick(mulDiv(ref, 150n, 100n), m.tickSize, 'floor')
+                    : roundToTick(mulDiv(ref, 50n, 100n), m.tickSize, 'ceil')
+                : defaultMarketBound(svc, { marketId: p.marketId, side: exitSide });
+            await pipeline.exec(() => {
+                const evts = [];
+                for (const out of [tpOut, slOut]) {
+                    const acc = out.find((e) => e.kind === 'orderAccepted');
+                    const live = acc ? engine.getOrder(acc.order.id) : undefined;
+                    if (live && (live.status === 'open' || live.status === 'untriggered')) {
+                        evts.push(...engine.cancelOrder(req.userId, live.id, Date.now()));
+                    }
+                }
+                const flatten = {
+                    marketId: p.marketId, side: exitSide, type: 'market', qty: coverQty, tif: 'IOC', reduceOnly: true,
+                    price: flattenBound,
+                };
+                evts.push(...engine.submitOrder(req.userId, flatten, Date.now()));
+                return evts;
+            });
+            const reason = (tpRej ?? slRej).reason;
+            // report the TRUE post-flatten state — never claim 'flattened' if liquidity
+            // was too thin to fully close (the client/ops must know it's still exposed)
+            const residual = engine.getPosition(req.userId, p.marketId);
+            if (residual && residual.size !== 0n) {
+                throw new DexError('INTERNAL', `bracket protection failed (${reason}); could not fully close — ${fromUnits(absBig(residual.size))} ${m.base} still open, place a manual stop`);
+            }
+            throw new DexError('INVALID_ORDER', `bracket protection failed (${reason}); entry was flattened`);
+        }
+        const legState = (out) => {
+            const acc = out.find((e) => e.kind === 'orderAccepted');
+            if (!acc)
+                return null;
+            return jsonSafe(engine.getOrder(acc.order.id) ?? finalOrderState(out, acc.order));
+        };
+        return jsonSafe({
+            ocoGroup: group,
+            entry: jsonSafe(finalOrderState(entryOut, entryAcc.order)),
+            filledQty: coverQty,
+            takeProfit: legState(tpOut),
+            stopLoss: legState(slOut),
+        });
+    });
+    app.get('/api/orders', { preHandler: authenticate }, async (req) => {
+        const q = req.query;
+        // lookup by clientOrderId returns the user's matching LIVE order (the id a
+        // client knows before it learns the server-assigned order id)
+        if (q.clientOrderId !== undefined) {
+            const hit = engine
+                .getOpenOrders(req.userId)
+                .find((o) => o.clientOrderId === q.clientOrderId);
+            if (!hit)
+                throw new DexError('ORDER_NOT_FOUND', `no live order with clientOrderId ${q.clientOrderId}`);
+            return jsonSafe(hit);
+        }
+        const status = q.status === 'closed' || q.status === 'all' ? q.status : 'open';
+        // open orders come live from the engine (source of truth); closed/all history
+        // is served from the durable projection with a cursor
+        if (status === 'open' && q.before === undefined) {
+            return jsonSafe(engine.getOpenOrders(req.userId));
+        }
+        const orders = await repos.orders.historyForUser(req.userId, {
+            status,
+            ...(q.before !== undefined ? { beforeSeq: Number(q.before) } : {}),
+            ...(q.limit !== undefined ? { limit: Number(q.limit) } : {}),
+        });
+        return jsonSafe(orders);
+    });
+    app.get('/api/fills', { preHandler: authenticate }, async (req) => {
+        const q = req.query;
+        const trades = await repos.orders.fillsForUser(req.userId, {
+            ...(q.before !== undefined ? { beforeSeq: Number(q.before) } : {}),
+            ...(q.limit !== undefined ? { limit: Number(q.limit) } : {}),
+        });
+        return jsonSafe(trades.map((t) => toFill(t, req.userId)));
+    });
+}
+/** A trade from one user's perspective. */
+function toFill(t, userId) {
+    const isTaker = t.takerUserId === userId;
+    const side = isTaker ? t.takerSide : t.takerSide === 'buy' ? 'sell' : 'buy';
+    return {
+        id: t.id,
+        marketId: t.marketId,
+        price: t.price,
+        qty: t.qty,
+        side,
+        takerSide: t.takerSide,
+        role: isTaker ? 'taker' : 'maker',
+        fee: isTaker ? t.takerFee : t.makerFee,
+        ts: t.ts,
+    };
+}
+/** Default worst-price bound for market orders: best opposite price ±5%. */
+function defaultMarketBound(svc, req) {
+    const { engine, priceCache } = svc;
+    const m = engine.getMarket(req.marketId);
+    if (!m)
+        throw new DexError('MARKET_NOT_FOUND', `unknown market ${req.marketId}`);
+    const book = engine.getOrderbook(req.marketId, 1);
+    const best = req.side === 'buy' ? book.asks[0]?.price : book.bids[0]?.price;
+    const ref = best ?? priceCache.get(req.marketId)?.price;
+    if (ref === undefined || ref <= 0n) {
+        throw new DexError('INVALID_ORDER', 'no reference price for market order bound');
+    }
+    const bound = req.side === 'buy'
+        ? roundToTick(mulDiv(ref, 105n, 100n), m.tickSize, 'floor')
+        : roundToTick(mulDiv(ref, 95n, 100n), m.tickSize, 'ceil');
+    if (bound <= 0n)
+        throw new DexError('INVALID_ORDER', 'no valid market order bound');
+    return bound;
+}

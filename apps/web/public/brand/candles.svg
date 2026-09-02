@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" fill="none" aria-hidden="true">
+  <defs>
+    <linearGradient id="up" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%" stop-color="#00c853" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#00e676"/>
+    </linearGradient>
+    <linearGradient id="dn" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%" stop-color="#c62828" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#ff5252"/>
+    </linearGradient>
+    <linearGradient id="area" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#00e5ff" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#00e5ff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="g"><feGaussianBlur stdDeviation="4"/></filter>
+  </defs>
+  <rect width="900" height="520" fill="#050a12"/>
+  <g stroke="#132033" stroke-width="1">
+    <path d="M0 80 H900 M0 160 H900 M0 240 H900 M0 320 H900 M0 400 H900"/>
+    <path d="M90 0 V520 M180 0 V520 M270 0 V520 M360 0 V520 M450 0 V520 M540 0 V520 M630 0 V520 M720 0 V520 M810 0 V520"/>
+  </g>
+  <path d="M40 360 L100 300 L160 320 L220 250 L280 270 L340 180 L400 210 L460 140 L520 160 L580 100 L640 120 L700 70 L760 90 L840 40 L840 520 L40 520 Z" fill="url(#area)"/>
+  <path d="M40 360 L100 300 L160 320 L220 250 L280 270 L340 180 L400 210 L460 140 L520 160 L580 100 L640 120 L700 70 L760 90 L840 40" stroke="#00e5ff" stroke-width="2.5" fill="none" filter="url(#g)"/>
+  <g>
+    <line x1="100" y1="220" x2="100" y2="380" stroke="#00e676" stroke-width="2"/>
+    <rect x="86" y="260" width="28" height="90" rx="2" fill="url(#up)"/>
+    <line x1="160" y1="240" x2="160" y2="400" stroke="#ff5252" stroke-width="2"/>
+    <rect x="146" y="290" width="28" height="80" rx="2" fill="url(#dn)"/>
+    <line x1="220" y1="180" x2="220" y2="340" stroke="#00e676" stroke-width="2"/>
+    <rect x="206" y="210" width="28" height="100" rx="2" fill="url(#up)"/>
+    <line x1="280" y1="200" x2="280" y2="360" stroke="#ff5252" stroke-width="2"/>
+    <rect x="266" y="250" width="28" height="85" rx="2" fill="url(#dn)"/>
+    <line x1="340" y1="120" x2="340" y2="300" stroke="#00e676" stroke-width="2"/>
+    <rect x="326" y="150" width="28" height="120" rx="2" fill="url(#up)"/>
+    <line x1="400" y1="150" x2="400" y2="320" stroke="#00e676" stroke-width="2"/>
+    <rect x="386" y="190" width="28" height="95" rx="2" fill="url(#up)"/>
+    <line x1="460" y1="90" x2="460" y2="260" stroke="#00e676" stroke-width="2"/>
+    <rect x="446" y="120" width="28" height="110" rx="2" fill="url(#up)"/>
+    <line x1="520" y1="110" x2="520" y2="280" stroke="#ff5252" stroke-width="2"/>
+    <rect x="506" y="160" width="28" height="90" rx="2" fill="url(#dn)"/>
+    <line x1="580" y1="60" x2="580" y2="220" stroke="#00e676" stroke-width="2"/>
+    <rect x="566" y="90" width="28" height="100" rx="2" fill="url(#up)"/>
+    <line x1="640" y1="80" x2="640" y2="240" stroke="#00e676" stroke-width="2"/>
+    <rect x="626" y="110" width="28" height="95" rx="2" fill="url(#up)"/>
+    <line x1="700" y1="40" x2="700" y2="200" stroke="#00e676" stroke-width="2"/>
+    <rect x="686" y="70" width="28" height="105" rx="2" fill="url(#up)"/>
+    <line x1="760" y1="55" x2="760" y2="210" stroke="#ff5252" stroke-width="2"/>
+    <rect x="746" y="100" width="28" height="80" rx="2" fill="url(#dn)"/>
+  </g>
+  <circle cx="840" cy="40" r="5" fill="#00e5ff" filter="url(#g)"/>
+</svg>

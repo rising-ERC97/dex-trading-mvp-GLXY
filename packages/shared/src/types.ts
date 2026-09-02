@@ -1,0 +1,268 @@
+export type Side = 'buy' | 'sell';
+export type OrderType = 'limit' | 'market';
+export type TimeInForce = 'GTC' | 'IOC' | 'FOK';
+/** 'untriggered' = a conditional (stop/take-profit) order waiting for its trigger. */
+export type OrderStatus = 'open' | 'filled' | 'cancelled' | 'rejected' | 'untriggered';
+export type MarketType = 'spot' | 'perp';
+
+/**
+ * A conditional trigger: the order is dormant until the mark price crosses
+ * `price` in the given `direction`, then it activates into a normal order.
+ * 'above' triggers when mark ≥ price (stop-buy / take-profit-sell);
+ * 'below' triggers when mark ≤ price (stop-sell / take-profit-buy).
+ */
+export interface TriggerSpec {
+  /** current stop price (1e8); for a trailing stop this ratchets with the ref price */
+  price: bigint;
+  direction: 'above' | 'below';
+  /**
+   * Trailing-stop distance (1e8, > 0). When set, the order is a TRAILING stop:
+   * `price` is maintained `trail` away from the most favorable ref price seen
+   * (raised as the ref rises for a sell-stop / lowered as it falls for a
+   * buy-stop) and fires when the ref reverses back through `price`.
+   */
+  trail?: bigint;
+}
+
+export interface MarketConfig {
+  /** spot: '<BASE>-USDC' (mirrors Upbit 'USDT-<BASE>'); perp: '<BASE>-PERP' */
+  id: string;
+  type: MarketType;
+  base: string;
+  quote: string; // always 'USDC' — a DEX settles in a stablecoin, no fiat
+  englishName: string | null;
+  /** price increment, 1e8 units */
+  tickSize: bigint;
+  /** qty increment, 1e8 units */
+  lotSize: bigint;
+  /** minimum order notional in quote, 1e8 units */
+  minNotional: bigint;
+  makerFeeBps: number;
+  takerFeeBps: number;
+  /** 1 for spot */
+  maxLeverage: number;
+}
+
+export interface OrderRequest {
+  marketId: string;
+  side: Side;
+  type: OrderType;
+  /** limit: required. market: optional slippage bound (worst acceptable price). */
+  price?: bigint;
+  /** base qty, 1e8 units */
+  qty: bigint;
+  tif: TimeInForce;
+  postOnly?: boolean;
+  /** perp only */
+  reduceOnly?: boolean;
+  clientOrderId?: string;
+  /** when set, the order is conditional: dormant until the mark crosses the trigger */
+  trigger?: TriggerSpec;
+  /** OCO link label: when any order sharing this group fills, the others cancel */
+  ocoGroup?: string;
+}
+
+export interface Order {
+  id: string;
+  userId: string;
+  marketId: string;
+  side: Side;
+  type: OrderType;
+  /** null for market orders without slippage bound */
+  price: bigint | null;
+  qty: bigint;
+  filledQty: bigint;
+  status: OrderStatus;
+  tif: TimeInForce;
+  postOnly: boolean;
+  reduceOnly: boolean;
+  clientOrderId: string | null;
+  /** conditional trigger; null for a normal order */
+  trigger: TriggerSpec | null;
+  /** OCO link label; null when the order is not part of an OCO group */
+  ocoGroup: string | null;
+  /** engine sequence at acceptance — total order over all events */
+  seq: number;
+  /** epoch ms, supplied by caller (engine is deterministic) */
+  ts: number;
+}
+
+export interface Trade {
+  id: string;
+  marketId: string;
+  price: bigint;
+  qty: bigint;
+  /** aggressor side */
+  takerSide: Side;
+  makerOrderId: string;
+  takerOrderId: string;
+  makerUserId: string;
+  takerUserId: string;
+  /** fee charged in quote currency, 1e8 units */
+  makerFee: bigint;
+  takerFee: bigint;
+  seq: number;
+  ts: number;
+}
+
+export interface Balance {
+  asset: string;
+  available: bigint;
+  locked: bigint;
+}
+
+export interface Position {
+  userId: string;
+  marketId: string;
+  /** signed base qty: > 0 long, < 0 short, never 0 (flat positions are removed) */
+  size: bigint;
+  /** volume-weighted entry price, 1e8 units */
+  entryPrice: bigint;
+  /** user-chosen leverage for IM on this market */
+  leverage: number;
+  /** isolated margin allocated to this position, 1e8 USDC units */
+  margin: bigint;
+}
+
+/** A position enriched with live mark-derived risk fields for display. */
+export interface PositionView extends Position {
+  /** current mark price used for the figures below (1e8 units) */
+  markPrice: bigint;
+  /** signed unrealized PnL at markPrice (1e8 USDC units) */
+  unrealizedPnl: bigint;
+  /** isolated liquidation price, or null when an adverse move can't liquidate it */
+  liquidationPrice: bigint | null;
+}
+
+export interface BookLevel {
+  price: bigint;
+  qty: bigint;
+}
+
+export interface OrderbookSnapshot {
+  marketId: string;
+  bids: BookLevel[]; // descending price
+  asks: BookLevel[]; // ascending price
+  seq: number;
+}
+
+export interface Ticker {
+  marketId: string;
+  /** last traded / mid price, 1e8 units */
+  price: bigint;
+  /** 24h change rate, 1e8 units (0.05 → 5e6) */
+  change24h: bigint;
+  high24h: bigint;
+  low24h: bigint;
+  /** 24h quote volume, 1e8 units */
+  volume24h: bigint;
+  ts: number;
+}
+
+/** A funding settlement applied to a user (durable history). */
+export interface FundingPaymentRecord {
+  marketId: string;
+  /** signed 1e8 funding rate at settlement */
+  rate: bigint;
+  /** signed USDC payment applied to the user (negative = paid, positive = received) */
+  payment: bigint;
+  markPrice: bigint;
+  seq: number;
+  ts: number;
+}
+
+/** A realized-PnL booking (close / reduce / liquidation / ADL). */
+export interface RealizedPnlRecord {
+  marketId: string;
+  /** signed realized PnL delta, 1e8 USDC units */
+  amount: bigint;
+  seq: number;
+  ts: number;
+}
+
+/** Cumulative realized PnL for a user, total and per market. */
+export interface RealizedPnlSummary {
+  total: bigint;
+  byMarket: { marketId: string; amount: bigint }[];
+}
+
+/** A force-close of one of a user's positions (durable history). */
+export interface LiquidationRecord {
+  marketId: string;
+  /** signed position size that was force-closed */
+  size: bigint;
+  markPrice: bigint;
+  seq: number;
+  ts: number;
+}
+
+/** A running/finished TWAP parent order, as surfaced to its owner. */
+export interface TwapJobView {
+  id: string;
+  marketId: string;
+  side: Side;
+  totalQty: bigint;
+  filledQty: bigint;
+  sliceQty: bigint;
+  slicesDone: number;
+  slicesTotal: number;
+  type: OrderType;
+  limitPrice: bigint | null;
+  intervalMs: number;
+  /** epoch ms of the next scheduled slice (0 once finished) */
+  nextRunTs: number;
+  status: 'running' | 'done' | 'cancelled';
+  createdTs: number;
+}
+
+export interface FundingInfo {
+  marketId: string;
+  /** funding rate for one interval, 1e8 units (0.0001 → 1e4); sign = longs pay shorts when positive */
+  rate: bigint;
+  /** funding interval length in ms (Hyperliquid settles hourly) */
+  intervalMs: number;
+  /** epoch ms of the next funding settlement */
+  nextFundingTs: number;
+  /** epoch ms when this rate was observed from the venue */
+  ts: number;
+}
+
+export type CandleInterval = '1m' | '5m' | '15m' | '1h' | '4h' | '1d';
+
+export interface Candle {
+  /** bucket open time, epoch ms */
+  t: number;
+  o: bigint;
+  h: bigint;
+  l: bigint;
+  c: bigint;
+  /** base volume, 1e8 units */
+  v: bigint;
+}
+
+export interface AccountSummary {
+  address: string;
+  balances: Balance[];
+  positions: PositionView[];
+  /** USDC equity = USDC balance + Σ unrealized PnL (1e8 units) */
+  perpEquity: bigint;
+  /** Σ initial margin in use */
+  marginUsed: bigint;
+}
+
+/** A DEX settles in a stablecoin — every market quotes/collateralizes in USDC. */
+export const SPOT_QUOTE = 'USDC';
+export const PERP_QUOTE = 'USDC';
+export const COLLATERAL = 'USDC';
+export const FEE_ACCOUNT = '__fees__';
+/** Internal clearinghouse book-entry account for perp PnL cash flows (may go negative). */
+export const CLEARING_ACCOUNT = '__clearing__';
+
+/** House commission: flat 0.02% (2 bps) on every fill, both roles, all markets. */
+export const SPOT_MAKER_FEE_BPS = 2;
+export const SPOT_TAKER_FEE_BPS = 2;
+export const PERP_MAKER_FEE_BPS = 2;
+export const PERP_TAKER_FEE_BPS = 2;
+
+/** Single demo collateral: $100,000 USDC, used for both spot and perps. */
+export const FAUCET_USDC = 100_000n * 10n ** 8n; // $100,000

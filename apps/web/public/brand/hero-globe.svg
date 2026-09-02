@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" fill="none" aria-hidden="true">
+  <defs>
+    <radialGradient id="g" cx="70%" cy="40%" r="55%">
+      <stop offset="0%" stop-color="#00e5ff" stop-opacity="0.22"/>
+      <stop offset="55%" stop-color="#0a3d4a" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#05080f" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="floor" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#00e5ff" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#00e5ff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%" stop-color="#00bcd4" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#00e5ff" stop-opacity="0.95"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="1600" height="900" fill="#05080f"/>
+  <rect width="1600" height="900" fill="url(#g)"/>
+  <!-- perspective grid -->
+  <g stroke="#1a3a4a" stroke-opacity="0.45" stroke-width="1">
+    <path d="M0 620 L800 520 L1600 620"/>
+    <path d="M0 680 L800 560 L1600 680"/>
+    <path d="M0 760 L800 610 L1600 760"/>
+    <path d="M0 860 L800 680 L1600 860"/>
+    <path d="M200 900 L800 520 L1400 900" fill="none"/>
+    <path d="M400 900 L800 520 L1200 900" fill="none"/>
+    <path d="M600 900 L800 520 L1000 900" fill="none"/>
+  </g>
+  <!-- wireframe globe -->
+  <g transform="translate(1080 340)" stroke="#4ec9e8" stroke-opacity="0.35" fill="none">
+    <ellipse cx="0" cy="0" rx="260" ry="260" stroke-width="1.2"/>
+    <ellipse cx="0" cy="0" rx="260" ry="90" stroke-width="1"/>
+    <ellipse cx="0" cy="0" rx="260" ry="160" stroke-width="0.8"/>
+    <ellipse cx="0" cy="0" rx="90" ry="260" stroke-width="1"/>
+    <ellipse cx="0" cy="0" rx="160" ry="260" stroke-width="0.8"/>
+    <circle cx="-40" cy="-70" r="3" fill="#9ef" stroke="none" opacity="0.8"/>
+    <circle cx="90" cy="40" r="2.5" fill="#9ef" stroke="none" opacity="0.7"/>
+    <circle cx="-120" cy="80" r="2" fill="#9ef" stroke="none" opacity="0.6"/>
+  </g>
+  <!-- rising cyan bars -->
+  <g filter="url(#glow)">
+    <rect x="180" y="520" width="28" height="80" fill="url(#bar)" rx="2"/>
+    <rect x="230" y="470" width="28" height="130" fill="url(#bar)" rx="2"/>
+    <rect x="280" y="430" width="28" height="170" fill="url(#bar)" rx="2"/>
+    <rect x="330" y="390" width="28" height="210" fill="url(#bar)" rx="2"/>
+    <rect x="380" y="410" width="28" height="190" fill="url(#bar)" rx="2"/>
+    <rect x="430" y="340" width="28" height="260" fill="url(#bar)" rx="2"/>
+    <rect x="480" y="300" width="28" height="300" fill="url(#bar)" rx="2"/>
+    <rect x="530" y="250" width="28" height="350" fill="url(#bar)" rx="2"/>
+    <rect x="580" y="280" width="28" height="320" fill="url(#bar)" rx="2"/>
+    <rect x="630" y="200" width="28" height="400" fill="url(#bar)" rx="2"/>
+    <rect x="680" y="160" width="28" height="440" fill="url(#bar)" rx="2"/>
+    <rect x="730" y="190" width="28" height="410" fill="url(#bar)" rx="2"/>
+    <rect x="780" y="120" width="32" height="480" fill="url(#bar)" rx="2"/>
+  </g>
+  <!-- floating prints -->
+  <g fill="#e8f7ff" font-family="IBM Plex Mono, monospace" font-size="14" opacity="0.55">
+    <text x="520" y="210">72.842</text>
+    <text x="860" y="300">55.470</text>
+    <text x="940" y="180">44.870</text>
+    <text x="420" y="140">35.410</text>
+    <text x="1000" y="460">51.629</text>
+  </g>
+  <rect x="0" y="600" width="1600" height="4" fill="url(#floor)" opacity="0.8"/>
+</svg>
